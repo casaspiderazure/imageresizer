@@ -1,0 +1,69 @@
+appServicePlan=ImageResizerAppServicePlan
+blobStorageAccount=storageimageresizer
+functionapp=casaspider-imageresizer
+functionstorage=storageimagefunctions
+globalLocation=westeurope
+resourceGroupName=rg-imageresizer
+webapp=casa-imageresizer
+
+az group create --name rg-imageresizer --location $globalLocation
+
+az storage account create --name $blobStorageAccount \
+--location $globalLocation --resource-group $resourceGroupName \
+--sku Standard_LRS --kind blobstorage --access-tier hot
+
+blobStorageAccountKey=$(az storage account keys list -g $resourceGroupName \
+-n $blobStorageAccount --query [0].value --output tsv)
+
+az storage container create -n images --account-name $blobStorageAccount \
+--account-key $blobStorageAccountKey --public-access off
+
+az storage container create -n thumbnails --account-name $blobStorageAccount \
+--account-key $blobStorageAccountKey --public-access container
+
+echo "Make a note of your Blob storage account key..."
+echo $blobStorageAccountKey
+
+az appservice plan create --name $appServicePlan --resource-group $resourceGroupName --sku Free
+
+az appservice plan create --name $appServicePlan --resource-group $resourceGroupName --sku Free
+
+az webapp create --name $webapp --resource-group rg-imageresizer --plan $appServicePlan
+
+az webapp deployment source config --name $webapp \
+--resource-group rg-imageresizer --branch master --manual-integration \
+--repo-url https://github.com/Azure-Samples/storage-blob-upload-from-webapp
+
+az webapp config appsettings set --name $webapp --resource-group rg-imageresizer \
+--settings AzureStorageConfig__AccountName=$blobStorageAccount \
+AzureStorageConfig__ImageContainer=images  \
+AzureStorageConfig__ThumbnailContainer=thumbnails \
+AzureStorageConfig__AccountKey=$blobStorageAccountKey 
+
+az provider register --namespace Microsoft.EventGrid
+
+az provider show --namespace Microsoft.EventGrid --query "registrationState"
+
+az storage account create --name $functionstorage --location $globalLocation \
+--resource-group $resourceGroupName --sku Standard_LRS --kind storage
+
+az functionapp create --name $functionapp --storage-account $functionstorage \
+--resource-group $resourceGroupName --consumption-plan-location $globalLocation
+
+storageConnectionString=$(az storage account show-connection-string --resource-group $resourceGroupName \
+--name $blobStorageAccount --query connectionString --output tsv)
+
+az functionapp config appsettings set --name $functionapp --resource-group $resourceGroupName \
+--settings AzureWebJobsStorage=$storageConnectionString THUMBNAIL_CONTAINER_NAME=thumbnails \
+THUMBNAIL_WIDTH=100 FUNCTIONS_EXTENSION_VERSION=~2
+
+az functionapp deployment source config --name $functionapp --resource-group $resourceGroupName --branch master --manual-integration --repo-url https://github.com/Azure-Samples/function-image-upload-resize
+
+storageAccountSubscriptionId=$(az storage account show --name storageimageresizer --query id --output tsv)
+
+-- Next step requires manual interference!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+-- Lookup the code and paste it right below.
+
+code="J8dHivM9zVzUadG3JG/8dvZKWS3Y2TaTvni8DSirmi47w6K2Bx07vg=="
+az eventgrid event-subscription create --name imageresizersub --source-resource-id "/subscriptions/195adad4-f2bd-4e56-8b49-4a943a169e16/resourceGroups/rg-imageresizer/providers/Microsoft.Storage/storageaccounts/storageimageresizer" --included-event-types "Microsoft.Storage.BlobCreated" --labels functions-thumbnail --subject-begins-with "/blobServices/default/containers/images/blobs/" --endpoint "https://casaspider-imageresizer.azurewebsites.net/runtime/webhooks/EventGrid?functionName=Thumbnail&code=$code"
+
